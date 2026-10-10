@@ -1,0 +1,12 @@
+# A template to page a human: `OnFailure=capture-bot-failed@%n.service` passes
+# the failed unit's name as %i. Edit the ExecStart line to your pager (ntfy,
+# Slack/Discord, PagerDuty, an SMS gateway) - curl ships everywhere.
+[Unit]
+Description=Report that %i failed on this machine
+
+[Service]
+Type=oneshot
+# Optional: put a private URL in this file (CAPTURE_FAILED_URL=...).
+EnvironmentFile=-/etc/fullpage-capture-bot/failed.env
+ExecStart=/bin/sh -c '/usr/bin/curl -fsS --max-time 15 -d "%i failed on %H - see: journalctl -u %i" "${CAPTURE_FAILED_URL:-https://ntfy.sh/fullpage-capture-bot}"'
+Nice=5

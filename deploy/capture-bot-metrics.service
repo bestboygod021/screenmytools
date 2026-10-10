@@ -1,0 +1,13 @@
+# FullPage Capture Bot: write the health metrics where Prometheus can find them.
+# Install to /etc/systemd/system/capture-bot-metrics.service (see deploy/README.md).
+[Unit]
+Description=Write FullPage Capture Bot metrics for the node exporter textfile collector
+Documentation=https://github.com/bestboygod021/screenmytools
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust the paths: the checkout, the capture folder and the textfile folder.
+WorkingDirectory=/opt/fullpage-capture-bot
+ExecStart=/usr/bin/env python -m app.cli metrics --dir /var/lib/capture-bot --stale-after 30 --caps 500,50,news.example.com=200,*=1000 --out /var/lib/node_exporter/textfile/capture_bot.prom --write-if-changed
+Nice=5
