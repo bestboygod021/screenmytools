@@ -1,0 +1,161 @@
+name: Weekly digest
+
+# Emails a plain-text summary of capture activity (changes, failures, busiest
+# sites, stale baselines) through the same SMTP settings the alerts use.
+#
+# Configure these repository secrets once:
+#   CAPTURE_SMTP_HOST  CAPTURE_SMTP_USER  CAPTURE_SMTP_PASSWORD
+#   CAPTURE_SMTP_PORT (optional, default 587)   CAPTURE_DIGEST_TO
+# Without them the job exits cleanly with a notice instead of failing.
+#
+# Set DIGEST_ISSUE_NUMBER to the number of a tracking issue and the same
+# summary is also posted there as one sticky comment (no email needed).
+on:
+  workflow_dispatch:
+    inputs:
+      history_dir:
+        description: Folder holding capture-report-*.json / history.sqlite3
+        required: false
+        default: dashboard_data
+      days:
+        description: Window size in days
+        required: false
+        default: "7"
+      issue_number:
+        description: Tracking issue for the sticky comment (empty = skip)
+        required: false
+        default: ""
+      profiles_base:
+        description: Folder holding saved profiles for a per-profile digest
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 7 * * 1"  # every Monday at 07:00 UTC
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  digest:
+    name: Build and send the digest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Explain what is missing (and stop) when SMTP is not configured
+        if: ${{ !secrets.CAPTURE_SMTP_HOST || !secrets.CAPTURE_DIGEST_TO }}
+        run: |
+          echo "::notice::Set CAPTURE_SMTP_HOST and CAPTURE_DIGEST_TO secrets to receive the digest."
+
+      - name: Send the digest
+        if: ${{ secrets.CAPTURE_SMTP_HOST && secrets.CAPTURE_DIGEST_TO }}
+        env:
+          HISTORY_DIR: ${{ github.event.inputs.history_dir || 'dashboard_data' }}
+          DIGEST_DAYS: ${{ github.event.inputs.days || '7' }}
+          CAPTURE_SMTP_HOST: ${{ secrets.CAPTURE_SMTP_HOST }}
+          CAPTURE_SMTP_PORT: ${{ secrets.CAPTURE_SMTP_PORT || '587' }}
+          CAPTURE_SMTP_USER: ${{ secrets.CAPTURE_SMTP_USER }}
+          CAPTURE_SMTP_PASSWORD: ${{ secrets.CAPTURE_SMTP_PASSWORD }}
+          CAPTURE_DIGEST_TO: ${{ secrets.CAPTURE_DIGEST_TO }}
+        run: |
+          python -m app.cli digest --dir "$HISTORY_DIR" --days "$DIGEST_DAYS" --send
+
+  announce:
+    name: Announce on the tracking issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the digest text
+        env:
+          HISTORY_DIR: ${{ github.event.inputs.history_dir || 'dashboard_data' }}
+          DIGEST_DAYS: ${{ github.event.inputs.days || '7' }}
+        run: |
+          mkdir -p "$HISTORY_DIR"
+          python -m app.cli digest --dir "$HISTORY_DIR" --days "$DIGEST_DAYS" > digest.txt
+          wc -l digest.txt
+
+      - name: Post or update the sticky comment
+        if: ${{ (github.event.inputs.issue_number || secrets.DIGEST_ISSUE_NUMBER) != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.inputs.issue_number || secrets.DIGEST_ISSUE_NUMBER }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          MARKER="<!-- capture-bot-weekly-digest -->"
+          {
+            echo "$MARKER"
+            echo "### Weekly digest"
+            echo
+            echo '```'
+            cat digest.txt
+            echo '```'
+            echo
+            echo "_Updated $(date -u '+%Y-%m-%d %H:%M UTC') - [workflow run](${RUN_URL})_"
+          } > comment.md
+
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE}/comments" \
+            --jq "[.[] | select(.body | contains(\"${MARKER}\"))][0].id // empty")
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+              -f body="$(cat comment.md)" > /dev/null
+            echo "Updated comment ${existing} on issue ${ISSUE}."
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE}/comments" \
+              -f body="$(cat comment.md)" > /dev/null
+            echo "Posted the digest to issue ${ISSUE}."
+          fi
+
+      - name: Explain how to enable the announcement
+        if: ${{ (github.event.inputs.issue_number || secrets.DIGEST_ISSUE_NUMBER) == '' }}
+        run: echo "::notice::Set the DIGEST_ISSUE_NUMBER secret (or pass issue_number) to post the digest on a tracking issue."
+
+  announce-profiles:
+    name: Per-profile tracking issues
+    if: ${{ github.event.inputs.profiles_base != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the per-profile plan
+        env:
+          HISTORY_DIR: ${{ github.event.inputs.history_dir || 'dashboard_data' }}
+        run: |
+          mkdir -p "$HISTORY_DIR"
+          python -m app.cli digest --dir "$HISTORY_DIR" \
+            --profiles --profiles-base "${{ github.event.inputs.profiles_base }}" \
+            --json > plan.json
+          cat plan.json
+
+      - name: Post one sticky comment per profile
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python tools/post_digest.py plan.json --run-url "$RUN_URL"
+
+      - name: Show the dry run so the output is visible in the log
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/post_digest.py plan.json --dry-run

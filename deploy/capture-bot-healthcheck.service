@@ -1,0 +1,15 @@
+# FullPage Capture Bot: fail loudly when the bot stopped succeeding.
+# Install to /etc/systemd/system/ (see deploy/README.md). systemd treats exit
+# code 1 as a failure, which is what OnFailure= reacts to.
+[Unit]
+Description=Fail when the FullPage Capture Bot has not captured successfully recently
+Documentation=https://github.com/bestboygod021/screenmytools
+# Anything that pages a human goes here (a unit you write, ntfy, a webhook...).
+OnFailure=capture-bot-failed@%n.service
+
+[Service]
+Type=oneshot
+# Adjust the paths and the cap numbers (--caps screenshots,history in MB).
+WorkingDirectory=/opt/fullpage-capture-bot
+ExecStart=/usr/bin/env python -m app.cli metrics --dir /var/lib/capture-bot --check --max-age 90 --caps 500,50
+Nice=5

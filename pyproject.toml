@@ -1,0 +1,20 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+# A pragmatic, high-signal rule set: real errors (pyflakes/pycodestyle), import
+# ordering, bugbear, modernisation and comprehensions. Style-only reformatting is
+# left to the formatter rather than the linter.
+select = ["E", "F", "W", "I", "B", "UP", "C4"]
+ignore = [
+    "E501",   # long lines are the formatter's concern, not the linter's
+    "UP042",  # (str, Enum) base classes are intentional and 3.10-compatible
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B017"]  # `pytest.raises(Exception)` is intentional in tests
+
+[tool.black]
+line-length = 100

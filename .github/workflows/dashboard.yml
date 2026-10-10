@@ -1,0 +1,181 @@
+name: Trend dashboard
+
+# Builds the static trend dashboard and publishes it to GitHub Pages.
+#
+# The dashboard generator is dependency-free (stdlib only), so this workflow
+# installs nothing beyond Python itself. Point it at any folder that holds
+# capture-report-*.json files (and optionally history.sqlite3):
+#   * workflow_dispatch input `history_dir` (default: dashboard_data)
+#   * or commit/upload reports under dashboard_data/ before the scheduled run.
+on:
+  workflow_dispatch:
+    inputs:
+      history_dir:
+        description: Folder holding capture-report-*.json / history.sqlite3
+        required: false
+        default: dashboard_data
+      baseline_max_age:
+        description: Mark baselines older than N days as stale (0 = don't check)
+        required: false
+        default: "30"
+  schedule:
+    - cron: "0 6 * * *"  # every day at 06:00 UTC
+  pull_request:
+    paths:
+      - "app/**"
+      - "dashboard_data/**"
+      - ".github/workflows/dashboard.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: trend-dashboard
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: PR preview
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          path: pr
+
+      - name: Check out the base branch for comparison
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the dashboard for this pull request
+        env:
+          BASELINE_MAX_AGE: "30"
+          # The checkout lives in pr/, so that is where `app` is importable from.
+          PYTHONPATH: pr
+        run: |
+          mkdir -p pr/dashboard_data base/dashboard_data _site
+          python -m app.cli dashboard \
+            --dir pr/dashboard_data \
+            --out _site/index.html \
+            --baseline-max-age "$BASELINE_MAX_AGE"
+
+      - name: Compare this branch against the base branch
+        env:
+          PYTHONPATH: pr
+        run: |
+          python -m app.cli digest \
+            --dir pr/dashboard_data \
+            --base base/dashboard_data \
+            --days 7 > _site/comparison.txt
+          cat _site/comparison.txt
+
+      - name: Upload the temporary preview
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-preview-${{ github.event.pull_request.number }}
+          path: _site
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Comment the preview link and the comparison on the pull request
+        # Forks get a read-only token, so only comment for in-repo branches.
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          MARKER="<!-- capture-bot-dashboard-preview -->"
+          {
+            echo "$MARKER"
+            echo "Trend dashboard preview for this PR: ${ARTIFACT_URL} _(temporary, kept 14 days)_"
+            echo
+            echo "Base branch vs this branch (last 7 days):"
+            echo
+            echo '```'
+            cat _site/comparison.txt
+            echo '```'
+            echo
+            echo "_Updated $(date -u '+%Y-%m-%d %H:%M UTC') - [workflow run](${RUN_URL})_"
+          } > comment.md
+
+          # Keep one sticky comment per PR: update ours instead of adding another.
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq "[.[] | select(.body | contains(\"${MARKER}\"))][0].id // empty")
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+              -f body="$(cat comment.md)" > /dev/null
+            echo "Updated comment ${existing}."
+          else
+            gh pr comment "$PR_NUMBER" --body-file comment.md
+            echo "Posted a new comment."
+          fi
+
+  build:
+    name: Build dashboard
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate the dashboard
+        env:
+          HISTORY_DIR: ${{ github.event.inputs.history_dir || 'dashboard_data' }}
+          BASELINE_MAX_AGE: ${{ github.event.inputs.baseline_max_age || '30' }}
+        run: |
+          mkdir -p "$HISTORY_DIR" _site
+          python -m app.cli dashboard \
+            --dir "$HISTORY_DIR" \
+            --out _site/index.html \
+            --baseline-max-age "$BASELINE_MAX_AGE"
+          echo "Wrote _site/index.html ($(wc -c < _site/index.html) bytes)"
+
+      - name: Upload the dashboard as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trend-dashboard
+          path: _site
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: build
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

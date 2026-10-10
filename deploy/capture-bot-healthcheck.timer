@@ -1,0 +1,13 @@
+# Runs the freshness check every 15 minutes; the check exits 1 when the last
+# successful capture is older than --max-age, so the unit fails visibly.
+[Unit]
+Description=Check that the FullPage Capture Bot is still succeeding
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Unit=capture-bot-healthcheck.service
+
+[Install]
+WantedBy=timers.target
