@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-guard
+        name: Ruff syntax guard
+        entry: python3 -m ruff check .
+        language: system
+        pass_filenames: false
+        always_run: true

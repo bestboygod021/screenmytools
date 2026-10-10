@@ -1,0 +1,66 @@
+name: Release
+
+# Build the Windows executable and publish it as a GitHub Release whenever a
+# version tag (v*) is pushed. Creating the release is also what the in-app
+# "Check updates" button looks at, so tagging a release makes it discoverable.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build & publish Windows exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build the executable (PyInstaller)
+        run: pyinstaller FullPageCaptureBot.spec --noconfirm
+
+      - name: Verify the artifact exists
+        run: |
+          if (-not (Test-Path dist/FullPageCaptureBot.exe)) {
+            Write-Error "dist/FullPageCaptureBot.exe was not produced."
+            exit 1
+          }
+
+      # Optional: sign the exe when a certificate secret is configured.
+      # Requires a CERT_PFX (base64) and CERT_PASSWORD repository secret.
+      - name: Sign the executable (optional)
+        if: ${{ secrets.CERT_PFX != '' }}
+        env:
+          CERT_PFX: ${{ secrets.CERT_PFX }}
+          CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:CERT_PFX))
+          signtool sign /f cert.pfx /p "$env:CERT_PASSWORD" `
+            /tr http://timestamp.sectigo.com /td sha256 /fd sha256 `
+            dist/FullPageCaptureBot.exe
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            dist/FullPageCaptureBot.exe `
+            --title "${{ github.ref_name }}" `
+            --generate-notes

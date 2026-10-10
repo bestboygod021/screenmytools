@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- virtual envs ---
+.venv/
+venv/
+env/
+
+# --- PyInstaller build output (never commit the .exe or intermediates) ---
+build/
+dist/
+*.manifest
+*.spec.bak
+
+# --- Playwright browser downloads ---
+/ms-playwright/
+
+# --- editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- local scratch ---
+preview_check.png
+
+# --- runtime state (written next to the captures, never part of the source) ---
+.channel-heartbeats.json
+pending-alerts.json

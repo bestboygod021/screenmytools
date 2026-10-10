@@ -1,0 +1,13 @@
+# Refreshes the metrics file every minute; the service skips the write when
+# nothing changed, so the file's mtime is the time of the last real change.
+[Unit]
+Description=Refresh the FullPage Capture Bot metrics file every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=capture-bot-metrics.service
+
+[Install]
+WantedBy=timers.target

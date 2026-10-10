@@ -1,0 +1,112 @@
+# Alerting rules for the FullPage Capture Bot.
+#
+# Point Prometheus at this file (prometheus.yml):
+#
+#   rule_files:
+#     - /etc/prometheus/rules/fullpage-capture-bot.yml
+#
+# They assume the timer in this folder feeds the scrape (directly or through the
+# node_exporter textfile collector - see README.md). The storage rules need
+# `--caps 500,50` on that timer (or `--caps 500,50,news.example.com=200,*=1000` to
+# expose the per-site budgets as capture_bot_site_cap_bytes{site=...}), otherwise
+# capture_bot_days_to_cap stays -1.
+groups:
+  - name: fullpage-capture-bot
+    rules:
+      - alert: CaptureBotMetricsMissing
+        expr: absent(capture_bot_last_success_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: FullPage Capture Bot metrics are gone
+          description: >-
+            No capture_bot_* series arrived for 15 minutes. The timer is stopped,
+            the folder moved, or the bot is not installed here any more.
+
+      - alert: CaptureBotNeverSucceeded
+        expr: capture_bot_last_success_timestamp_seconds < 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: FullPage Capture Bot has never captured successfully
+          description: >-
+            Runs happen (or the metrics are fresh) but not one page has been
+            captured: a wrong URL list, a login that no longer works, or a
+            browser that will not start.
+
+      - alert: CaptureBotNotSucceeding
+        expr: time() - capture_bot_last_success_timestamp_seconds > 3600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: No successful capture for over an hour
+          description: >-
+            Every run in the last hour failed, or no run happened at all.
+            Check journalctl -u capture-bot-metrics.service.
+
+      - alert: CaptureBotStale
+        expr: capture_bot_health_state{state="stale"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The capture history is stale
+          description: Nothing new arrived within the --stale-after window.
+
+      - alert: CaptureBotNoCaptures
+        expr: capture_bot_health_state{state="empty"} == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: The capture folder is empty
+          description: >-
+            The bot is being monitored but has never written a report. Check the
+            output folder on the machine that runs it.
+
+      - alert: CaptureBotQueueGrowing
+        expr: capture_bot_pending_alerts > 50
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: The quiet-hours alert queue is growing
+          description: >-
+            More than 50 change alerts are waiting to go out: a quiet window that
+            never ends, a webhook that has been failing since it started, or
+            alerting switched off mid-run.
+
+      - alert: CaptureBotQueueStuck
+        expr: capture_bot_oldest_pending_alert_seconds > 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: An alert has been queued for more than a day
+          description: Check alert_quiet_hours and the webhook/SMTP settings.
+
+      - alert: CaptureBotCapInSight
+        expr: capture_bot_days_to_cap >= 0 and capture_bot_days_to_cap < 7
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: The history will reach its cap within a week
+          description: >-
+            Raise history_retention_mb/screenshot_retention_mb, shorten the
+            retention window, or turn on history_archive so the dropped runs are
+            zipped instead of deleted.
+
+      - alert: CaptureBotHistoryGrowing
+        expr: capture_bot_history_bytes > 5e8 and delta(capture_bot_history_bytes[7d]) > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: The history folder keeps growing past 500 MB
+          description: >-
+            No cap is configured (or it is very high): set history_retention_mb
+            so the bot prunes its own history.
